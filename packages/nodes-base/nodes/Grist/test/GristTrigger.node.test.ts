@@ -61,7 +61,7 @@ describe('GristTrigger', () => {
 
 		it('uses OAuth2 against api.getgrist.com for hosted Grist', async () => {
 			const { hookFns, requestOAuth2 } = setup({ authentication: 'oAuth2' });
-			hookFns.getCredentials.mockResolvedValue({});
+			hookFns.getCredentials.mockResolvedValue({ url: 'https://api.getgrist.com' });
 			requestOAuth2.mockResolvedValue({ webhooks: [] });
 
 			await new GristTrigger().webhookMethods.default.checkExists.call(hookFns);

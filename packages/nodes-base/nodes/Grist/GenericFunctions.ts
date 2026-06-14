@@ -25,7 +25,10 @@ export type GristRequestContext =
 	| IHookFunctions
 	| IWebhookFunctions;
 
-export function gristApiKeyBaseUrl(credentials: GristCredentials): string {
+// Legacy API-key credential host resolution (free → docs, paid → team subdomain,
+// self-hosted → entered URL), used as a fallback for credentials created before the
+// single `url` field below.
+function gristLegacyBaseUrl(credentials: GristCredentials): string {
 	if (credentials.planType === 'free') {
 		return 'https://docs.getgrist.com';
 	}
@@ -33,6 +36,16 @@ export function gristApiKeyBaseUrl(credentials: GristCredentials): string {
 		return `https://${credentials.customSubdomain}.getgrist.com`;
 	}
 	return (credentials.selfHostedUrl ?? '').replace(/\/$/, '');
+}
+
+// Resolve the Grist server base URL for either credential type. Credentials store a
+// single `url`; legacy API-key credentials fall back to their plan-type fields.
+// Defaults to the SaaS API host, which serves every hosted account.
+export function gristBaseUrl(credentials: GristCredentials): string {
+	if (credentials.url) {
+		return credentials.url.replace(/\/$/, '');
+	}
+	return gristLegacyBaseUrl(credentials) || 'https://api.getgrist.com';
 }
 
 export async function gristApiRequest(
@@ -43,10 +56,12 @@ export async function gristApiRequest(
 	qs: IDataObject = {},
 ) {
 	const authentication = this.getNodeParameter('authentication', 0) as string;
+	const credentialsType = authentication === 'oAuth2' ? 'gristOAuth2Api' : 'gristApi';
+	const credentials = await this.getCredentials<GristCredentials>(credentialsType);
 
 	const options: IRequestOptions = {
 		method,
-		uri: '',
+		uri: `${gristBaseUrl(credentials)}/api${endpoint}`,
 		qs,
 		body,
 		json: true,
@@ -62,16 +77,8 @@ export async function gristApiRequest(
 
 	try {
 		if (authentication === 'oAuth2') {
-			const credentials = await this.getCredentials('gristOAuth2Api');
-			const baseUrl = (
-				(credentials.selfHostedUrl as string) || 'https://api.getgrist.com'
-			).replace(/\/$/, '');
-			options.uri = `${baseUrl}/api${endpoint}`;
 			return await this.helpers.requestOAuth2.call(this, 'gristOAuth2Api', options);
 		}
-
-		const credentials = await this.getCredentials<GristCredentials>('gristApi');
-		options.uri = `${gristApiKeyBaseUrl(credentials)}/api${endpoint}`;
 		options.headers = { Authorization: `Bearer ${credentials.apiKey}` };
 		return await this.helpers.request(options);
 	} catch (error) {

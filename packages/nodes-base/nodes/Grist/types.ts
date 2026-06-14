@@ -1,6 +1,9 @@
 export type GristCredentials = {
-	apiKey: string;
-	planType: 'free' | 'paid' | 'selfHosted';
+	apiKey?: string;
+	url?: string;
+	oauthTokenData?: { access_token?: string };
+	// Legacy API-key credential fields, superseded by `url`:
+	planType?: 'free' | 'paid' | 'selfHosted';
 	customSubdomain?: string;
 	selfHostedUrl?: string;
 };

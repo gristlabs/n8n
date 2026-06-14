@@ -1,9 +1,5 @@
 import type { ICredentialType, INodeProperties } from 'n8n-workflow';
 
-// Grist's OAuth server requires PKCE for every client and issues confidential
-// clients (client ID + secret). Requesting `offline_access` only yields a
-// refresh token when the authorization request also sends `prompt=consent`,
-// so that is pinned in `authQueryParameters`.
 // Resource scopes from Grist's OAuth-apps authorization server
 // (/.well-known/oauth-authorization-server). The identity scopes (openid/email/
 // profile) belong to the separate Sign-in-with-Grist server and are not valid here.
@@ -26,28 +22,27 @@ export class GristOAuth2Api implements ICredentialType {
 			default: 'pkce',
 		},
 		{
-			displayName: 'Self-Hosted URL',
-			name: 'selfHostedUrl',
+			displayName: 'Grist URL',
+			name: 'url',
 			type: 'string',
-			default: '',
-			placeholder: 'https://grist.example.com',
+			default: 'https://api.getgrist.com',
 			description:
-				'Leave blank for hosted Grist. For a self-managed instance with OAuth Apps enabled, enter its URL (without /api and no trailing slash).',
+				'The default works for any hosted Grist account. To restrict this connection to a single team, use https://YOUR_TEAM.getgrist.com. For self-managed Grist with OAuth Apps enabled, use your instance URL (without /api and no trailing slash).',
 		},
 		{
-			// Hosted Grist serves the OAuth endpoints from login.getgrist.com (the issuer) and the
-			// REST API from api.getgrist.com; a self-managed instance serves both from its own URL.
+			// Grist mounts the OAuth endpoints on every host and canonicalizes the flow to its login
+			// server, so deriving them from the same Grist URL works for hosted and self-managed alike.
 			displayName: 'Authorization URL',
 			name: 'authUrl',
 			type: 'hidden',
-			default: '={{$self["selfHostedUrl"] || "https://login.getgrist.com"}}/oidc/auth',
+			default: '={{$self["url"]}}/oidc/auth',
 			required: true,
 		},
 		{
 			displayName: 'Access Token URL',
 			name: 'accessTokenUrl',
 			type: 'hidden',
-			default: '={{$self["selfHostedUrl"] || "https://login.getgrist.com"}}/oidc/token',
+			default: '={{$self["url"]}}/oidc/token',
 			required: true,
 		},
 		{
