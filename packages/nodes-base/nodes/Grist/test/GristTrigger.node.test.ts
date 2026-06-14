@@ -59,16 +59,16 @@ describe('GristTrigger', () => {
 			expect(staticData.webhookId).toBe('wh_1');
 		});
 
-		it('uses OAuth2 and the credential URL when authentication is oAuth2', async () => {
+		it('uses OAuth2 against api.getgrist.com for hosted Grist', async () => {
 			const { hookFns, requestOAuth2 } = setup({ authentication: 'oAuth2' });
-			hookFns.getCredentials.mockResolvedValue({ url: 'https://docs.getgrist.com' });
+			hookFns.getCredentials.mockResolvedValue({});
 			requestOAuth2.mockResolvedValue({ webhooks: [] });
 
 			await new GristTrigger().webhookMethods.default.checkExists.call(hookFns);
 
 			expect(requestOAuth2).toHaveBeenCalledWith(
 				'gristOAuth2Api',
-				expect.objectContaining({ uri: 'https://docs.getgrist.com/api/docs/doc1/webhooks' }),
+				expect.objectContaining({ uri: 'https://api.getgrist.com/api/docs/doc1/webhooks' }),
 			);
 		});
 	});

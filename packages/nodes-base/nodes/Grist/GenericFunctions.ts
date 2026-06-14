@@ -63,7 +63,9 @@ export async function gristApiRequest(
 	try {
 		if (authentication === 'oAuth2') {
 			const credentials = await this.getCredentials('gristOAuth2Api');
-			const baseUrl = (credentials.url as string).replace(/\/$/, '');
+			const baseUrl = (
+				(credentials.selfHostedUrl as string) || 'https://api.getgrist.com'
+			).replace(/\/$/, '');
 			options.uri = `${baseUrl}/api${endpoint}`;
 			return await this.helpers.requestOAuth2.call(this, 'gristOAuth2Api', options);
 		}
