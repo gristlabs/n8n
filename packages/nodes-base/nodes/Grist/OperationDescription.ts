@@ -6,7 +6,57 @@ export const operationFields: INodeProperties[] = [
 		name: 'operation',
 		type: 'options',
 		noDataExpression: true,
+		displayOptions: {
+			show: {
+				'@version': [1],
+			},
+		},
 		options: [
+			{
+				name: 'Create Row',
+				value: 'create',
+				description: 'Create rows in a table',
+				action: 'Create rows in a table',
+			},
+			{
+				name: 'Delete Row',
+				value: 'delete',
+				description: 'Delete rows from a table',
+				action: 'Delete rows from a table',
+			},
+			{
+				// eslint-disable-next-line n8n-nodes-base/node-param-option-name-wrong-for-get-many
+				name: 'Get Many Rows',
+				value: 'getAll',
+				description: 'Read rows from a table',
+				action: 'Read rows from a table',
+			},
+			{
+				name: 'Update Row',
+				value: 'update',
+				description: 'Update rows in a table',
+				action: 'Update rows in a table',
+			},
+		],
+		default: 'getAll',
+	},
+	{
+		displayName: 'Operation',
+		name: 'operation',
+		type: 'options',
+		noDataExpression: true,
+		displayOptions: {
+			show: {
+				'@version': [2],
+			},
+		},
+		options: [
+			{
+				name: 'Create or Update',
+				value: 'upsert',
+				description: 'Create a new row, or update the current one if it already exists (upsert)',
+				action: 'Create or update rows in a table',
+			},
 			{
 				name: 'Create Row',
 				value: 'create',
@@ -226,7 +276,7 @@ export const operationFields: INodeProperties[] = [
 	},
 
 	// ----------------------------------
-	//         create + update
+	//      create + update (v1 only)
 	// ----------------------------------
 	{
 		displayName: 'Data to Send',
@@ -247,6 +297,7 @@ export const operationFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				operation: ['create', 'update'],
+				'@version': [1],
 			},
 		},
 		default: 'defineInNode',
@@ -260,6 +311,7 @@ export const operationFields: INodeProperties[] = [
 			show: {
 				operation: ['create', 'update'],
 				dataToSend: ['autoMapInputs'],
+				'@version': [1],
 			},
 		},
 		default: '',
@@ -280,6 +332,7 @@ export const operationFields: INodeProperties[] = [
 			show: {
 				operation: ['create', 'update'],
 				dataToSend: ['defineInNode'],
+				'@version': [1],
 			},
 		},
 		default: {},
@@ -309,5 +362,102 @@ export const operationFields: INodeProperties[] = [
 				],
 			},
 		],
+	},
+
+	// ----------------------------------
+	//   create + update + upsert (v2)
+	// ----------------------------------
+	{
+		displayName: 'Columns',
+		name: 'columns',
+		type: 'resourceMapper',
+		noDataExpression: true,
+		default: {
+			mappingMode: 'defineBelow',
+			value: null,
+		},
+		required: true,
+		typeOptions: {
+			loadOptionsDependsOn: ['docId', 'tableId'],
+			resourceMapper: {
+				resourceMapperMethod: 'getMappingColumns',
+				mode: 'add',
+				fieldWords: {
+					singular: 'column',
+					plural: 'columns',
+				},
+				addAllFields: true,
+				multiKeyMatch: true,
+				supportAutoMap: true,
+			},
+		},
+		displayOptions: {
+			show: {
+				operation: ['create'],
+				'@version': [2],
+			},
+		},
+	},
+	{
+		displayName: 'Columns',
+		name: 'columns',
+		type: 'resourceMapper',
+		noDataExpression: true,
+		default: {
+			mappingMode: 'defineBelow',
+			value: null,
+		},
+		required: true,
+		typeOptions: {
+			loadOptionsDependsOn: ['docId', 'tableId'],
+			resourceMapper: {
+				resourceMapperMethod: 'getMappingColumns',
+				mode: 'add',
+				fieldWords: {
+					singular: 'column',
+					plural: 'columns',
+				},
+				addAllFields: true,
+				multiKeyMatch: true,
+				supportAutoMap: true,
+			},
+		},
+		displayOptions: {
+			show: {
+				operation: ['update'],
+				'@version': [2],
+			},
+		},
+	},
+	{
+		displayName: 'Columns',
+		name: 'columns',
+		type: 'resourceMapper',
+		noDataExpression: true,
+		default: {
+			mappingMode: 'defineBelow',
+			value: null,
+		},
+		required: true,
+		typeOptions: {
+			loadOptionsDependsOn: ['docId', 'tableId'],
+			resourceMapper: {
+				resourceMapperMethod: 'getMappingColumns',
+				mode: 'upsert',
+				fieldWords: {
+					singular: 'column',
+					plural: 'columns',
+				},
+				addAllFields: true,
+				multiKeyMatch: true,
+				supportAutoMap: true,
+			},
+		},
+		displayOptions: {
+			show: {
+				operation: ['upsert'],
+				'@version': [2],
+			},
+		},
 	},
 ];

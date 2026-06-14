@@ -1,4 +1,5 @@
 import type {
+	FieldType,
 	IDataObject,
 	IExecuteFunctions,
 	IHookFunctions,
@@ -8,11 +9,13 @@ import type {
 	IRequestOptions,
 	IWebhookFunctions,
 	JsonObject,
+	ResourceMapperFields,
 } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
 import type {
 	GristColumns,
+	GristColumnSchema,
 	GristCredentials,
 	GristDefinedFields,
 	GristFilterProperties,
@@ -97,6 +100,63 @@ export async function getTableColumns(
 		`/docs/${docId}/tables/${tableId}/columns`,
 	)) as GristColumns;
 	return columns.map(({ id }) => ({ name: id, value: id }));
+}
+
+// Grist column types may carry a suffix, e.g. `Ref:Table1` or `DateTime:UTC`,
+// so we match on the prefix before the colon.
+function mapGristColumnType(gristType?: string): FieldType {
+	const baseType = (gristType ?? '').split(':')[0];
+	switch (baseType) {
+		case 'Numeric':
+		case 'Int':
+			return 'number';
+		case 'Bool':
+			return 'boolean';
+		case 'Date':
+		case 'DateTime':
+			return 'dateTime';
+		case 'Choice':
+			return 'options';
+		case 'ChoiceList':
+		case 'RefList':
+		case 'Attachments':
+			return 'array';
+		default:
+			// Text, Ref, Any and anything unrecognized map to string.
+			return 'string';
+	}
+}
+
+function isHiddenColumn(id: string): boolean {
+	return id === 'manualSort' || id.startsWith('gristHelper_');
+}
+
+export async function getMappingColumns(
+	this: ILoadOptionsFunctions,
+): Promise<ResourceMapperFields> {
+	const docId = this.getNodeParameter('docId', 0) as string;
+	const tableId = this.getNodeParameter('tableId', 0) as string;
+	const { columns } = (await gristApiRequest.call(
+		this,
+		'GET',
+		`/docs/${docId}/tables/${tableId}/columns`,
+	)) as GristColumnSchema;
+
+	const fields = columns
+		.filter(({ id }) => !isHiddenColumn(id))
+		.map(({ id, fields: col }) => ({
+			id,
+			displayName: col.label ?? id,
+			type: mapGristColumnType(col.type),
+			// Pure formula columns aren't writable; trigger formulas (isFormula false) are.
+			readOnly: col.isFormula === true,
+			required: false,
+			defaultMatch: false,
+			display: true,
+			canBeUsedToMatch: true,
+		}));
+
+	return { fields };
 }
 
 export function parseSortProperties(sortProperties: GristSortProperties) {

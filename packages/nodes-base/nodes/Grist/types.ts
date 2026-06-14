@@ -12,6 +12,18 @@ export type GristColumns = {
 	columns: Array<{ id: string }>;
 };
 
+export type GristColumnSchema = {
+	columns: Array<{
+		id: string;
+		fields: {
+			label?: string;
+			type?: string;
+			isFormula?: boolean;
+			formula?: string;
+		};
+	}>;
+};
+
 export type GristSortProperties = Array<{
 	field: string;
 	direction: 'asc' | 'desc';
@@ -42,6 +54,13 @@ export type GristUpdateRowPayload = {
 	records: Array<{
 		id: number;
 		fields: { [key: string]: any };
+	}>;
+};
+
+export type GristUpsertRowPayload = {
+	records: Array<{
+		require: { [key: string]: unknown };
+		fields: { [key: string]: unknown };
 	}>;
 };
 

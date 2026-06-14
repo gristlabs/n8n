@@ -10,9 +10,11 @@ import {
 	type INodeTypeDescription,
 	type IRequestOptions,
 	NodeConnectionTypes,
+	setSafeObjectProperty,
 } from 'n8n-workflow';
 
 import {
+	getMappingColumns,
 	getTableColumns,
 	gristApiRequest,
 	gristBaseUrl,
@@ -29,6 +31,7 @@ import type {
 	GristCredentials,
 	GristGetAllOptions,
 	GristUpdateRowPayload,
+	GristUpsertRowPayload,
 	SendingOptions,
 } from './types';
 
@@ -56,7 +59,7 @@ export class Grist implements INodeType {
 		icon: 'file:grist.svg',
 		subtitle: '={{$parameter["operation"]}}',
 		group: ['input'],
-		version: 1,
+		version: [1, 2],
 		description: 'Consume the Grist API',
 		defaults: {
 			name: 'Grist',
@@ -92,6 +95,10 @@ export class Grist implements INodeType {
 	methods = {
 		loadOptions: {
 			getTableColumns,
+		},
+
+		resourceMapping: {
+			getMappingColumns,
 		},
 
 		credentialTest: {
@@ -142,6 +149,7 @@ export class Grist implements INodeType {
 		const returnData: INodeExecutionData[] = [];
 
 		const operation = this.getNodeParameter('operation', 0);
+		const version = this.getNode().typeVersion;
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -154,18 +162,23 @@ export class Grist implements INodeType {
 
 					const body = { records: [] } as GristCreateRowPayload;
 
-					const dataToSend = this.getNodeParameter('dataToSend', 0) as SendingOptions;
-
-					if (dataToSend === 'autoMapInputs') {
-						const incomingKeys = Object.keys(items[i].json);
-						const rawInputsToIgnore = this.getNodeParameter('inputsToIgnore', i) as string;
-						const inputsToIgnore = rawInputsToIgnore.split(',').map((c) => c.trim());
-						const fields = parseAutoMappedInputs(incomingKeys, inputsToIgnore, items[i].json);
+					if (version >= 2) {
+						const fields = this.getNodeParameter('columns.value', i, {}) as IDataObject;
 						body.records.push({ fields });
-					} else if (dataToSend === 'defineInNode') {
-						const { properties } = this.getNodeParameter('fieldsToSend', i, []) as FieldsToSend;
-						throwOnZeroDefinedFields.call(this, properties);
-						body.records.push({ fields: parseDefinedFields(properties) });
+					} else {
+						const dataToSend = this.getNodeParameter('dataToSend', 0) as SendingOptions;
+
+						if (dataToSend === 'autoMapInputs') {
+							const incomingKeys = Object.keys(items[i].json);
+							const rawInputsToIgnore = this.getNodeParameter('inputsToIgnore', i) as string;
+							const inputsToIgnore = rawInputsToIgnore.split(',').map((c) => c.trim());
+							const fields = parseAutoMappedInputs(incomingKeys, inputsToIgnore, items[i].json);
+							body.records.push({ fields });
+						} else if (dataToSend === 'defineInNode') {
+							const { properties } = this.getNodeParameter('fieldsToSend', i, []) as FieldsToSend;
+							throwOnZeroDefinedFields.call(this, properties);
+							body.records.push({ fields: parseDefinedFields(properties) });
+						}
 					}
 
 					const docId = this.getNodeParameter('docId', 0) as string;
@@ -177,6 +190,33 @@ export class Grist implements INodeType {
 						id: responseData.records[0].id,
 						...body.records[0].fields,
 					};
+				} else if (operation === 'upsert') {
+					// ----------------------------------
+					//             upsert
+					// ----------------------------------
+
+					// https://support.getgrist.com/api/#tag/records/paths/~1docs~1{docId}~1tables~1{tableId}~1records/put
+
+					const fields = this.getNodeParameter('columns.value', i, {}) as IDataObject;
+					const matchingColumns = this.getNodeParameter(
+						'columns.matchingColumns',
+						i,
+						[],
+					) as string[];
+
+					const require = matchingColumns.reduce<IDataObject>((acc, key) => {
+						setSafeObjectProperty(acc, key, fields[key]);
+						return acc;
+					}, {});
+
+					const body: GristUpsertRowPayload = { records: [{ require, fields }] };
+
+					const docId = this.getNodeParameter('docId', 0) as string;
+					const tableId = this.getNodeParameter('tableId', 0) as string;
+					const endpoint = `/docs/${docId}/tables/${tableId}/records`;
+
+					await gristApiRequest.call(this, 'PUT', endpoint, body);
+					responseData = { ...fields };
 				} else if (operation === 'delete') {
 					// ----------------------------------
 					//            delete
@@ -206,19 +246,25 @@ export class Grist implements INodeType {
 					const body = { records: [] } as GristUpdateRowPayload;
 
 					const rowId = this.getNodeParameter('rowId', i) as string;
-					const dataToSend = this.getNodeParameter('dataToSend', 0) as SendingOptions;
 
-					if (dataToSend === 'autoMapInputs') {
-						const incomingKeys = Object.keys(items[i].json);
-						const rawInputsToIgnore = this.getNodeParameter('inputsToIgnore', i) as string;
-						const inputsToIgnore = rawInputsToIgnore.split(',').map((c) => c.trim());
-						const fields = parseAutoMappedInputs(incomingKeys, inputsToIgnore, items[i].json);
+					if (version >= 2) {
+						const fields = this.getNodeParameter('columns.value', i, {}) as IDataObject;
 						body.records.push({ id: Number(rowId), fields });
-					} else if (dataToSend === 'defineInNode') {
-						const { properties } = this.getNodeParameter('fieldsToSend', i, []) as FieldsToSend;
-						throwOnZeroDefinedFields.call(this, properties);
-						const fields = parseDefinedFields(properties);
-						body.records.push({ id: Number(rowId), fields });
+					} else {
+						const dataToSend = this.getNodeParameter('dataToSend', 0) as SendingOptions;
+
+						if (dataToSend === 'autoMapInputs') {
+							const incomingKeys = Object.keys(items[i].json);
+							const rawInputsToIgnore = this.getNodeParameter('inputsToIgnore', i) as string;
+							const inputsToIgnore = rawInputsToIgnore.split(',').map((c) => c.trim());
+							const fields = parseAutoMappedInputs(incomingKeys, inputsToIgnore, items[i].json);
+							body.records.push({ id: Number(rowId), fields });
+						} else if (dataToSend === 'defineInNode') {
+							const { properties } = this.getNodeParameter('fieldsToSend', i, []) as FieldsToSend;
+							throwOnZeroDefinedFields.call(this, properties);
+							const fields = parseDefinedFields(properties);
+							body.records.push({ id: Number(rowId), fields });
+						}
 					}
 
 					const docId = this.getNodeParameter('docId', 0) as string;
