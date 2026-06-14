@@ -3,9 +3,9 @@ import {
 	type ICredentialsDecrypted,
 	type ICredentialTestFunctions,
 	type IDataObject,
-	type ILoadOptionsFunctions,
 	type INodeCredentialTestResult,
 	type INodeExecutionData,
+	type INodeProperties,
 	type INodeType,
 	type INodeTypeDescription,
 	type IRequestOptions,
@@ -13,6 +13,8 @@ import {
 } from 'n8n-workflow';
 
 import {
+	getTableColumns,
+	gristApiKeyBaseUrl,
 	gristApiRequest,
 	parseAutoMappedInputs,
 	parseDefinedFields,
@@ -23,13 +25,29 @@ import {
 import { operationFields } from './OperationDescription';
 import type {
 	FieldsToSend,
-	GristColumns,
 	GristCreateRowPayload,
 	GristCredentials,
 	GristGetAllOptions,
 	GristUpdateRowPayload,
 	SendingOptions,
 } from './types';
+
+const authentication: INodeProperties = {
+	displayName: 'Authentication',
+	name: 'authentication',
+	type: 'options',
+	options: [
+		{
+			name: 'API Key',
+			value: 'apiKey',
+		},
+		{
+			name: 'OAuth2',
+			value: 'oAuth2',
+		},
+	],
+	default: 'apiKey',
+};
 
 export class Grist implements INodeType {
 	description: INodeTypeDescription = {
@@ -51,21 +69,28 @@ export class Grist implements INodeType {
 				name: 'gristApi',
 				required: true,
 				testedBy: 'gristApiTest',
+				displayOptions: {
+					show: {
+						authentication: ['apiKey'],
+					},
+				},
+			},
+			{
+				name: 'gristOAuth2Api',
+				required: true,
+				displayOptions: {
+					show: {
+						authentication: ['oAuth2'],
+					},
+				},
 			},
 		],
-		properties: operationFields,
+		properties: [authentication, ...operationFields],
 	};
 
 	methods = {
 		loadOptions: {
-			async getTableColumns(this: ILoadOptionsFunctions) {
-				const docId = this.getNodeParameter('docId', 0) as string;
-				const tableId = this.getNodeParameter('tableId', 0) as string;
-				const endpoint = `/docs/${docId}/tables/${tableId}/columns`;
-
-				const { columns } = (await gristApiRequest.call(this, 'GET', endpoint)) as GristColumns;
-				return columns.map(({ id }) => ({ name: id, value: id }));
-			},
+			getTableColumns,
 		},
 
 		credentialTest: {
@@ -73,24 +98,14 @@ export class Grist implements INodeType {
 				this: ICredentialTestFunctions,
 				credential: ICredentialsDecrypted,
 			): Promise<INodeCredentialTestResult> {
-				const { apiKey, planType, customSubdomain, selfHostedUrl } =
-					credential.data as GristCredentials;
-
-				const endpoint = '/orgs';
-
-				const gristapiurl =
-					planType === 'free'
-						? `https://docs.getgrist.com/api${endpoint}`
-						: planType === 'paid'
-							? `https://${customSubdomain}.getgrist.com/api${endpoint}`
-							: `${selfHostedUrl}/api${endpoint}`;
+				const credentials = credential.data as GristCredentials;
 
 				const options: IRequestOptions = {
 					headers: {
-						Authorization: `Bearer ${apiKey}`,
+						Authorization: `Bearer ${credentials.apiKey}`,
 					},
 					method: 'GET',
-					uri: gristapiurl,
+					uri: `${gristApiKeyBaseUrl(credentials)}/api/orgs`,
 					qs: { limit: 1 },
 					json: true,
 				};

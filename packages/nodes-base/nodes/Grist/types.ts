@@ -45,3 +45,11 @@ export type GristUpdateRowPayload = {
 export type SendingOptions = 'defineInNode' | 'autoMapInputs';
 
 export type FieldsToSend = { properties: GristDefinedFields };
+
+export type GristWebhookList = {
+	webhooks: Array<{ id: string; fields?: { url?: string } }>;
+};
+
+export type GristWebhookCreated = {
+	webhooks: Array<{ id: string }>;
+};
