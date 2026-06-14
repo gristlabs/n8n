@@ -17,7 +17,6 @@ describe('GristTrigger', () => {
 		hookFns.getWorkflowStaticData.mockReturnValue(staticData);
 		hookFns.getCredentials.mockResolvedValue({
 			apiKey: 'key',
-			planType: 'selfHosted',
 			selfHostedUrl: 'http://localhost:8484',
 		});
 

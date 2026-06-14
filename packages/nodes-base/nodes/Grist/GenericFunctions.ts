@@ -28,27 +28,26 @@ export type GristRequestContext =
 	| IHookFunctions
 	| IWebhookFunctions;
 
-// Legacy API-key credential host resolution (free → docs, paid → team subdomain,
-// self-hosted → entered URL), used as a fallback for credentials created before the
-// single `url` field below.
+// Fallback for API-key credentials created before the single `url` field: self-hosted
+// instances stored a full URL, teams stored a subdomain. Defaults to the SaaS API host,
+// which serves every hosted account.
 function gristLegacyBaseUrl(credentials: GristCredentials): string {
-	if (credentials.planType === 'free') {
-		return 'https://docs.getgrist.com';
+	if (credentials.selfHostedUrl) {
+		return credentials.selfHostedUrl.replace(/\/$/, '');
 	}
-	if (credentials.planType === 'paid') {
+	if (credentials.customSubdomain) {
 		return `https://${credentials.customSubdomain}.getgrist.com`;
 	}
-	return (credentials.selfHostedUrl ?? '').replace(/\/$/, '');
+	return 'https://api.getgrist.com';
 }
 
 // Resolve the Grist server base URL for either credential type. Credentials store a
-// single `url`; legacy API-key credentials fall back to their plan-type fields.
-// Defaults to the SaaS API host, which serves every hosted account.
+// single `url`; older ones fall back to their legacy fields.
 export function gristBaseUrl(credentials: GristCredentials): string {
 	if (credentials.url) {
 		return credentials.url.replace(/\/$/, '');
 	}
-	return gristLegacyBaseUrl(credentials) || 'https://api.getgrist.com';
+	return gristLegacyBaseUrl(credentials);
 }
 
 export async function gristApiRequest(
