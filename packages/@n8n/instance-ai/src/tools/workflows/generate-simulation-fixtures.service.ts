@@ -27,11 +27,14 @@ import {
 	findOutputParserTargets,
 	parsePinDataResponse,
 	repairStructuredOutput,
+	toEngineConnections,
 } from '@n8n/workflow-sdk';
 import { getParentNodes, mapConnectionsByDestination, type IConnections } from 'n8n-workflow';
 import { z } from 'zod';
 
 import { isTriggerNodeType } from './workflow-json-utils';
+import type { Logger } from '../../logger';
+import type { ModelConfig } from '../../types';
 import { SONNET_MODEL } from '../../utils/eval-agents';
 import { generateValidatedJson } from '../../utils/generate-validated-json';
 import type { NodeSimulationVerdict } from '../../workflow-loop/workflow-loop-state';
@@ -53,6 +56,9 @@ export interface GenerateSimulationFixturesInput {
 	 * structure instead of the model's guess at the service's response shape.
 	 */
 	outputSchemaLookup?: OutputSchemaLookup;
+	/** Host-resolved model used when no eval model API key is configured in the environment. */
+	fallbackModelConfig?: ModelConfig;
+	logger?: Logger;
 }
 
 // Loose on purpose: items may arrive `{json: {...}}`-wrapped, flat, or as an
@@ -165,7 +171,7 @@ export async function generateSimulationFixtures(
 	const schemaContextByName = new Map(schemaContexts.map((ctx) => [ctx.nodeName, ctx] as const));
 
 	const connectionsByDestination = mapConnectionsByDestination(
-		(input.workflow.connections ?? {}) as IConnections,
+		toEngineConnections(input.workflow.connections),
 	);
 	const userText = [
 		'Generate realistic mock output (pin-data items) for the following simulated n8n nodes.',
@@ -196,8 +202,15 @@ export async function generateSimulationFixtures(
 		instructions: SYSTEM_INSTRUCTIONS,
 		userText,
 		schema: FixturesResponseSchema,
+		fallbackModelConfig: input.fallbackModelConfig,
 	});
-	if (!result.ok) return emptyFixtures(nodeNames);
+	if (!result.ok) {
+		input.logger?.warn('Simulation fixture generation failed; simulated nodes get empty items', {
+			reason: result.reason,
+			nodeCount: nodeNames.length,
+		});
+		return emptyFixtures(nodeNames);
+	}
 
 	// Shared normalization + envelope repair, matching the eval pin-data paths:
 	// wrap-or-passthrough items, then mechanically fix the two known LLM

@@ -44,12 +44,16 @@ import { ActivationErrorsService } from '@/activation-errors.service';
 import { MessageEventBus } from '@/eventbus/message-event-bus/message-event-bus';
 import { ExternalHooks } from '@/external-hooks';
 import { NodeTypes } from '@/node-types';
+import { PolicyEnforcementService } from '@/policy/policy-enforcement.service';
+import { isPolicyRefusal } from '@/policy/policy-violation.error';
 import { Push } from '@/push';
 import { Publisher } from '@/scaling/pubsub/publisher.service';
 import { PubSubCommandMap } from '@/scaling/pubsub/pubsub.event-map';
 import type { ScheduleTriggerCollectionSession } from '@/scheduling/schedule-trigger-node/schedule-trigger-job-registrar';
+import { PollTriggerJobRegistrar } from '@/scheduling/poll-trigger-node/poll-trigger-job-registrar';
 import { ScheduleTriggerJobRegistrar } from '@/scheduling/schedule-trigger-node/schedule-trigger-job-registrar';
 import { ActiveWorkflowsService } from '@/services/active-workflows.service';
+import { OwnershipService } from '@/services/ownership.service';
 import * as WebhookHelpers from '@/webhooks/webhook-helpers';
 import { WebhookService } from '@/webhooks/webhook.service';
 import * as WorkflowExecuteAdditionalData from '@/workflow-execute-additional-data';
@@ -87,6 +91,9 @@ export class ActiveWorkflowManager {
 		private readonly triggerExecutionContextFactory: TriggerExecutionContextFactory,
 		private readonly eventBus: MessageEventBus,
 		private readonly scheduleTriggerJobRegistrar: ScheduleTriggerJobRegistrar,
+		private readonly pollTriggerJobRegistrar: PollTriggerJobRegistrar,
+		private readonly policyEnforcementService: PolicyEnforcementService,
+		private readonly ownershipService: OwnershipService,
 	) {
 		this.logger = this.logger.scoped(['workflow-activation']);
 	}
@@ -146,7 +153,6 @@ export class ActiveWorkflowManager {
 		nodeIds?: Set<string>,
 	) {
 		let webhooks = WebhookHelpers.getWorkflowWebhooks(workflow, additionalData, undefined, true);
-		let path = '';
 
 		if (nodeIds) {
 			webhooks = webhooks.filter((webhookData) =>
@@ -160,26 +166,15 @@ export class ActiveWorkflowManager {
 			const node = workflow.getNode(webhookData.node) as INode;
 			node.name = webhookData.node;
 
-			path = webhookData.path;
-
-			const webhook = this.webhookService.createWebhook({
-				workflowId: webhookData.workflowId,
-				webhookPath: path,
-				node: node.name,
-				method: webhookData.httpMethod,
-			});
-
-			if (webhook.webhookPath.startsWith('/')) {
-				webhook.webhookPath = webhook.webhookPath.slice(1);
-			}
-			if (webhook.webhookPath.endsWith('/')) {
-				webhook.webhookPath = webhook.webhookPath.slice(0, -1);
-			}
-
-			if ((path.startsWith(':') || path.includes('/:')) && node.webhookId) {
-				webhook.webhookId = node.webhookId;
-				webhook.pathLength = webhook.webhookPath.split('/').length;
-			}
+			const webhook = this.webhookService.createWebhook(
+				{
+					workflowId: webhookData.workflowId,
+					webhookPath: webhookData.path,
+					node: node.name,
+					method: webhookData.httpMethod,
+				},
+				node.webhookId,
+			);
 
 			try {
 				// `storeWebhook` registers the webhook atomically on the
@@ -456,6 +451,16 @@ export class ActiveWorkflowManager {
 				});
 			}
 		} catch (error) {
+			// An expected refusal, permanent until policy or workflow changes: no fault
+			// report, no error workflow and no retry, or every restart alerts.
+			if (isPolicyRefusal(error)) {
+				this.logger.warn(`Publication of ${formatWorkflow(dbWorkflow)} blocked by policy`, {
+					workflowId: dbWorkflow.id,
+				});
+
+				return;
+			}
+
 			this.errorReporter.error(error);
 			this.logger.error(
 				`Issue on initial workflow activation try of ${formatWorkflow(dbWorkflow)} (startup)`,
@@ -592,6 +597,17 @@ export class ActiveWorkflowManager {
 
 			dbWorkflow.nodes = nodes;
 			dbWorkflow.connections = connections;
+
+			// Trigger and poller nodes run code at registration, so this gates startup
+			// and leadership change too, not just the activate button.
+			if (this.policyEnforcementService.hasChecksFor('workflowPublish')) {
+				const project = await this.ownershipService.getWorkflowProjectCached(dbWorkflow.id);
+
+				await this.policyEnforcementService.enforceWorkflowPublish({
+					workflow: { id: dbWorkflow.id, name: dbWorkflow.name, nodes },
+					projectId: project.id,
+				});
+			}
 
 			workflow = new Workflow({
 				id: dbWorkflow.id,
@@ -751,44 +767,48 @@ export class ActiveWorkflowManager {
 				return;
 			}
 
-			const dbWorkflow = await this.workflowRepository.findById(workflowId);
+			// A policy refusal happens before anything is registered, so there is
+			// nothing to tear down — and unpublishing is not this path's call to make.
+			if (!isPolicyRefusal(error)) {
+				const dbWorkflow = await this.workflowRepository.findById(workflowId);
 
-			// Activation may have failed partway with triggers already registered,
-			// in memory and as durable schedule jobs. Tear them down before the
-			// deactivation below so the active version is still resolvable, or
-			// they keep firing a workflow marked inactive. Each teardown is caught
-			// on its own so a webhook failure never skips the schedule-job cleanup.
-			try {
-				await this.clearWebhooks(workflowId);
-			} catch (cleanupError) {
-				this.logger.error(`Failed to remove webhooks of workflow "${workflowId}"`, {
-					workflowId,
-					error: ensureError(cleanupError),
-				});
-			}
-
-			try {
-				await this.removeNonWebhookTriggers(workflowId);
-			} catch (cleanupError) {
-				this.logger.error(`Failed to remove triggers of workflow "${workflowId}"`, {
-					workflowId,
-					error: ensureError(cleanupError),
-				});
-			}
-
-			await this.workflowRepository.update(workflowId, { active: false, activeVersionId: null });
-
-			if (dbWorkflow && (activationMode === 'init' || activationMode === 'leadershipChange')) {
-				void this.eventBus.sendAuditEvent({
-					eventName: 'n8n.audit.workflow.deactivated',
-					payload: {
+				// Activation may have failed partway with triggers already registered,
+				// in memory and as durable jobs. Tear them down before the
+				// deactivation below so the active version is still resolvable, or
+				// they keep firing a workflow marked inactive. Each teardown is caught
+				// on its own so a webhook failure never skips the durable-job cleanup.
+				try {
+					await this.clearWebhooks(workflowId);
+				} catch (cleanupError) {
+					this.logger.error(`Failed to remove webhooks of workflow "${workflowId}"`, {
 						workflowId,
-						workflowName: dbWorkflow.name,
-						deactivatedVersionId: dbWorkflow.activeVersionId ?? null,
-						activationMode,
-						reason: error.name,
-					},
-				});
+						error: ensureError(cleanupError),
+					});
+				}
+
+				try {
+					await this.removeNonWebhookTriggers(workflowId);
+				} catch (cleanupError) {
+					this.logger.error(`Failed to remove triggers of workflow "${workflowId}"`, {
+						workflowId,
+						error: ensureError(cleanupError),
+					});
+				}
+
+				await this.workflowRepository.update(workflowId, { active: false, activeVersionId: null });
+
+				if (dbWorkflow && (activationMode === 'init' || activationMode === 'leadershipChange')) {
+					void this.eventBus.sendAuditEvent({
+						eventName: 'n8n.audit.workflow.deactivated',
+						payload: {
+							workflowId,
+							workflowName: dbWorkflow.name,
+							deactivatedVersionId: dbWorkflow.activeVersionId ?? null,
+							activationMode,
+							reason: error.name,
+						},
+					});
+				}
 			}
 
 			this.push.broadcast({
@@ -843,6 +863,7 @@ export class ActiveWorkflowManager {
 	) {
 		const workflowId = workflowData.id;
 		const workflowName = workflowData.name;
+		const own: { activation?: QueuedActivation } = {};
 
 		const retryFunction = async () => {
 			this.logger.info(`Try to activate workflow "${workflowName}" (${workflowId})`, {
@@ -852,7 +873,23 @@ export class ActiveWorkflowManager {
 			try {
 				await this.add(workflowId, activationMode, workflowData, { shouldPublish: false });
 			} catch (error) {
+				// An expected refusal, permanent until policy or workflow changes: no fault
+				// report, and leave the queue rather than retrying forever.
+				if (isPolicyRefusal(error)) {
+					this.logger.warn(`Publication of workflow "${workflowId}" blocked by policy`, {
+						workflowId,
+					});
+
+					// Only our own entry: a newer failure may have replaced it since.
+					if (this.queuedActivations[workflowId] === own.activation) {
+						this.removeQueuedWorkflowActivation(workflowId);
+					}
+
+					return;
+				}
+
 				this.errorReporter.error(error);
+
 				const queuedActivation = this.queuedActivations[workflowId];
 				if (!queuedActivation) {
 					return;
@@ -888,12 +925,13 @@ export class ActiveWorkflowManager {
 		// multiple run in parallel
 		this.removeQueuedWorkflowActivation(workflowId);
 
-		this.queuedActivations[workflowId] = {
+		own.activation = {
 			activationMode,
 			lastTimeout: WORKFLOW_REACTIVATE_INITIAL_TIMEOUT,
 			timeout: setTimeout(retryFunction, WORKFLOW_REACTIVATE_INITIAL_TIMEOUT),
 			workflowData,
 		};
+		this.queuedActivations[workflowId] = own.activation;
 	}
 
 	/**
@@ -936,14 +974,7 @@ export class ActiveWorkflowManager {
 			// Drop the durable jobs here rather than leaving it to the fire-and-forget
 			// command below: they are DB state, so removal is leader-independent, and a
 			// lost command would otherwise leak them, firing an inactive workflow.
-			try {
-				await this.scheduleTriggerJobRegistrar.removeWorkflow(workflowId);
-			} catch (error) {
-				this.errorReporter.error(error);
-				this.logger.error(
-					`Could not remove durable schedule jobs of workflow "${workflowId}" because of error: "${error.message}"`,
-				);
-			}
+			await this.removeDurableJobs(workflowId);
 
 			void this.publisher.publishCommand({
 				command: 'remove-triggers-and-pollers',
@@ -989,8 +1020,28 @@ export class ActiveWorkflowManager {
 	}
 
 	/**
+	 * Remove a workflow's durable jobs. The registrars run independently so a
+	 * failure in one cannot skip the other and leak its jobs.
+	 */
+	private async removeDurableJobs(workflowId: WorkflowId) {
+		const results = await Promise.allSettled([
+			this.scheduleTriggerJobRegistrar.removeWorkflow(workflowId),
+			this.pollTriggerJobRegistrar.removeWorkflow(workflowId),
+		]);
+
+		for (const result of results) {
+			if (result.status === 'rejected') {
+				this.errorReporter.error(result.reason);
+				this.logger.error(
+					`Could not remove durable jobs of workflow "${workflowId}" because of error: "${ensureError(result.reason).message}"`,
+				);
+			}
+		}
+	}
+
+	/**
 	 * Stop running active, poll, and schedule triggers for a workflow,
-	 * and drop the durable schedule jobs its activation committed.
+	 * and drop the durable jobs its activation committed.
 	 */
 	async removeNonWebhookTriggers(workflowId: WorkflowId) {
 		// `activeWorkflowTriggers.remove` is idempotent and always deregisters the workflow's
@@ -1000,7 +1051,7 @@ export class ActiveWorkflowManager {
 		// A deactivation through this legacy path must also deprovision the durable
 		// jobs that addNonWebhookTriggers committed, exactly like the publication
 		// path's deregister does. Otherwise the durable scheduler keeps firing the
-		// schedule nodes of a workflow now marked inactive. Keyed by the workflow
+		// trigger nodes of a workflow now marked inactive. Keyed by the workflow
 		// alone, not the node ids registered in memory: those are already gone if
 		// an earlier removal failed here, and a retry must stay idempotent. A no-op
 		// for workflows without durable rows. Leader stepdown/shutdown must NOT
@@ -1013,14 +1064,7 @@ export class ActiveWorkflowManager {
 		// here would also skip the workflowDeactivated broadcast, leaving the UI
 		// showing a torn-down workflow as active. Report and continue, mirroring
 		// how clearWebhooks failures are handled.
-		try {
-			await this.scheduleTriggerJobRegistrar.removeWorkflow(workflowId);
-		} catch (error) {
-			this.errorReporter.error(error);
-			this.logger.error(
-				`Could not remove durable schedule jobs of workflow "${workflowId}" because of error: "${error.message}"`,
-			);
-		}
+		await this.removeDurableJobs(workflowId);
 
 		if (wasRemoved) {
 			this.logger.debug(`Removed non-webhook triggers for workflow "${workflowId}"`, {
