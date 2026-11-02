@@ -12,7 +12,7 @@ import type {
 	getIntegrationToolConnectionDescriptors,
 	IntegrationMessageContext,
 } from '../../../integration-tools';
-import { LinearIntegration } from '../../../platforms/linear-integration';
+import { LinearIntegration } from '../../../platforms/linear/linear-integration';
 import {
 	createReplayContextSetup,
 	installFetchStub,
@@ -99,6 +99,7 @@ export interface LinearReplayContext extends Omit<ReplayContextSetup, 'nextStrea
 	agentExecutor: {
 		executeForChatPublished: Mock;
 		resumeForChat: Mock;
+		isResumable: Mock;
 	};
 	apiCalls: LinearApiCall[];
 	descriptor: ReturnType<typeof getIntegrationToolConnectionDescriptors>[number];

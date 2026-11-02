@@ -6,7 +6,7 @@ import type { InstanceSettings } from 'n8n-core';
 import type { Mock } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 
-import type { UrlService } from '@/services/url.service';
+import type { UrlService } from '@n8n/backend-services';
 
 import type { AgentRepository } from '../../../../repositories/agent.repository';
 import type { ChatInstance } from '../../../chat-integration.service';
@@ -16,7 +16,7 @@ import type {
 	getIntegrationToolConnectionDescriptors,
 	IntegrationMessageContext,
 } from '../../../integration-tools';
-import { TelegramIntegration } from '../../../platforms/telegram-integration';
+import { TelegramIntegration } from '../../../platforms/telegram/telegram-integration';
 import {
 	createReplayContextSetup,
 	installFetchStub,
@@ -92,6 +92,7 @@ export interface TelegramReplayContext extends Omit<ReplayContextSetup, 'nextStr
 	agentExecutor: {
 		executeForChatPublished: Mock;
 		resumeForChat: Mock;
+		isResumable: Mock;
 	};
 	actionExecutor: ChatIntegrationActionExecutor;
 	apiCalls: TelegramApiCall[];

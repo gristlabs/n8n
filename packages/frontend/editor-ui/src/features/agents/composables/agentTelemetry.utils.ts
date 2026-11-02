@@ -1,11 +1,11 @@
 import { isDraftIntegration } from '@n8n/api-types';
+import { sha256 } from '@n8n/utils/sha256';
 
 import type { AgentJsonConfig, AgentJsonToolRef, AgentResource } from '../types';
 
 export type AgentTelemetryStatus = 'draft' | 'production';
 
 export type AgentConfigFingerprint = {
-	instructions: string;
 	tools: string[];
 	skills: string[];
 	tasks: string[];
@@ -18,15 +18,10 @@ export type AgentConfigFingerprint = {
 
 /**
  * Internal helper used to compute a stable 16-char hex `config_version` join
- * key. Not a privacy mechanism — agent payloads carry the raw config fields.
+ * key. The hash covers the instructions, but the payload does not carry them.
  */
 async function sha256Hex16(input: string): Promise<string> {
-	const bytes = new TextEncoder().encode(input);
-	const digest = await crypto.subtle.digest('SHA-256', bytes);
-	const hex = Array.from(new Uint8Array(digest))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-	return hex.slice(0, 16);
+	return (await sha256(input)).slice(0, 16);
 }
 
 function toolIdentifier(ref: AgentJsonToolRef): string {
@@ -87,7 +82,6 @@ export async function buildAgentConfigFingerprint(
 	const configVersion = await sha256Hex16(versionPayload);
 
 	return {
-		instructions,
 		tools,
 		skills,
 		tasks,
